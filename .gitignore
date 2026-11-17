@@ -1,0 +1,56 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+/dist/
+/build/
+/frontend/dist/
+/frontend/build/
+/backend/dist/
+/backend/build/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+
+# Local project data, media, transcripts, and generated exports
+/input/
+/output/
+
+# Faster-Whisper and other local model download caches
+.cache/
+.huggingface/
+faster-whisper-cache/
+faster_whisper_cache/
+whisper-models/
+
+# Local environment files; keep safe templates
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local environment overrides
+frontend/.env.local
+backend/.env
+
+# Temporary files, logs, and local backups
+*.tmp
+*.temp
+*.log
+*.bak
+*.backup
+*.old
+*~
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
