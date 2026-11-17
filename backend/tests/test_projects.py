@@ -10,12 +10,27 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.projects import audio as audio_module
 from app.projects import media as media_module
-from app.projects.models import MediaInfo
+from app.projects.models import AudioInfo, MediaInfo
 from app.projects.repository import ProjectNotFound, ProjectRepository
 
 
 class ProjectRepositoryTests(unittest.TestCase):
+    def test_audio_probe_extracts_ffprobe_metadata_and_rejects_extension_mismatch(self):
+        probe = {
+            "streams": [{"codec_type": "audio", "codec_name": "pcm_s16le", "sample_rate": "48000", "channels": 2, "duration": "2.5"}],
+            "format": {"format_name": "wav", "duration": "2.5"},
+        }
+        with patch("app.projects.audio._probe_sync", return_value=probe):
+            metadata = audio_module._probe_audio_sync(Path("audio.uploading"), ".wav")
+            with self.assertRaises(media_module.InvalidMedia):
+                audio_module._probe_audio_sync(Path("audio.uploading"), ".mp3")
+        self.assertEqual(metadata, {
+            "duration": 2.5, "sample_rate": 48000, "channels": 2,
+            "codec": "pcm_s16le", "format_name": "wav",
+        })
+
     def test_projects_have_stable_ids_and_recover_after_repository_restart(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "projects"
@@ -195,6 +210,231 @@ class ProjectApiTests(unittest.TestCase):
             f"/api/v1/projects/{project_id}/media", headers={"Range": "bytes=999-"}
         )
         self.assertEqual(unsatisfiable.status_code, 416)
+
+    def test_import_audio_validates_and_persists_ffprobe_metadata_without_replacing_video(self):
+        project = self.create_project()
+        project_id = project["id"]
+        video_before = {
+            "filename": "clip.mp4", "relative_path": f"{project_id}/media/clip.mp4",
+            "duration": 1.0, "width": 640, "height": 360, "fps": 30,
+            "video_codec": "h264", "audio_codec": "aac", "has_audio": True, "probe_error": None,
+        }
+        record = app.state.project_repository.get(project_id)
+        record["media"] = video_before
+        app.state.project_repository.save(project_id, record)
+        audio_info = AudioInfo(
+            filename="voice.wav", relative_path=f"{project_id}/media/voice.wav", duration=4.25,
+            sample_rate=48000, channels=2, codec="pcm_s16le", format_name="wav",
+        )
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(return_value=audio_info)):
+            imported = self.client.post(
+                f"/api/v1/projects/{project_id}/audio?filename=voice.wav", content=b"wav bytes",
+            )
+        self.assertEqual(imported.status_code, 201, imported.text)
+        stored = self.project_root / project_id / "media" / "voice.wav"
+        self.assertEqual(stored.read_bytes(), b"wav bytes")
+        reopened = self.client.get(f"/api/v1/projects/{project_id}").json()
+        self.assertEqual(reopened["audio"]["sample_rate"], 48000)
+        self.assertEqual(reopened["audio"]["duration"], 4.25)
+        self.assertEqual(reopened["media"], video_before)
+        transcript = {"language": "es", "segments": [{"text": "Anterior"}]}
+        record = app.state.project_repository.get(project_id)
+        record["document"] = {
+            "design": {"fontFamily": "Anton"}, "transcription": transcript,
+            "phrase_transcription": {"version": 1, "phrases": [{"id": "F001"}]},
+        }
+        record["transcription"] = transcript
+        record["transcription_info"] = {"filename": "voice.json", "language": "es", "segment_count": 1, "word_count": 1}
+        app.state.project_repository.save(project_id, record)
+        mp3_info = AudioInfo(
+            filename="voice-v2.mp3", relative_path=f"{project_id}/media/voice-v2.mp3", duration=5.0,
+            sample_rate=44100, channels=2, codec="mp3", format_name="mp3",
+        )
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(return_value=mp3_info)):
+            replaced = self.client.post(
+                f"/api/v1/projects/{project_id}/audio?filename=voice-v2.mp3", content=b"mp3 bytes",
+            )
+        self.assertEqual(replaced.status_code, 201, replaced.text)
+        reopened = self.client.get(f"/api/v1/projects/{project_id}").json()
+        self.assertEqual(reopened["audio"]["codec"], "mp3")
+        self.assertIsNone(reopened["transcription_info"])
+        self.assertNotIn("transcription", reopened["document"])
+        self.assertNotIn("phrase_transcription", reopened["document"])
+        self.assertEqual(reopened["document"]["design"], {"fontFamily": "Anton"})
+        self.assertFalse(stored.exists())
+        self.assertTrue((self.project_root / project_id / "media" / "voice-v2.mp3").exists())
+        self.assertEqual(reopened["media"], video_before)
+
+    def test_replace_mp3_with_wav_and_invalid_replacement_preserves_current_audio_and_transcript(self):
+        project = self.create_project()
+        project_id = project["id"]
+        old_path = self.project_root / project_id / "media" / "voice.mp3"
+        old_path.write_bytes(b"old mp3")
+        record = app.state.project_repository.get(project_id)
+        old_audio = AudioInfo(
+            filename="voice.mp3", relative_path=f"{project_id}/media/voice.mp3", duration=4,
+            sample_rate=44100, channels=2, codec="mp3", format_name="mp3",
+        )
+        transcript = {"language": "es", "segments": [{"text": "Keep"}]}
+        record["audio"] = old_audio.model_dump()
+        record["document"] = {"transcription": transcript, "phrase_transcription": {"version": 1, "phrases": []}}
+        record["transcription_info"] = {"filename": "voice.json", "language": "es", "segment_count": 1, "word_count": 1}
+        app.state.project_repository.save(project_id, record)
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(side_effect=media_module.InvalidMedia("not WAV"))):
+            invalid = self.client.post(
+                f"/api/v1/projects/{project_id}/audio?filename=voice.wav", content=b"invalid",
+            )
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(old_path.read_bytes(), b"old mp3")
+        self.assertEqual(app.state.project_repository.get(project_id)["document"]["transcription"], transcript)
+
+        wav_info = AudioInfo(
+            filename="voice.wav", relative_path=f"{project_id}/media/voice.wav", duration=7,
+            sample_rate=48000, channels=1, codec="pcm_s16le", format_name="wav",
+        )
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(return_value=wav_info)):
+            replaced = self.client.post(
+                f"/api/v1/projects/{project_id}/audio?filename=voice.wav", content=b"new wav",
+            )
+        self.assertEqual(replaced.status_code, 201, replaced.text)
+        saved = app.state.project_repository.get(project_id)
+        self.assertEqual(saved["audio"]["filename"], "voice.wav")
+        self.assertIsNone(saved["transcription_info"])
+        self.assertNotIn("transcription", saved["document"])
+        self.assertFalse(old_path.exists())
+        self.assertEqual((self.project_root / project_id / "media" / "voice.wav").read_bytes(), b"new wav")
+
+    def test_failed_persistence_rolls_back_same_filename_audio_and_transcription(self):
+        project = self.create_project()
+        project_id = project["id"]
+        repo = app.state.project_repository
+        audio_path = repo.media_path(project_id, "voice.wav")
+        audio_path.write_bytes(b"old audio")
+        transcript = {"language": "es", "segments": [{"text": "Antes"}]}
+        record = repo.get(project_id)
+        record["audio"] = AudioInfo(
+            filename="voice.wav", relative_path=f"{project_id}/media/voice.wav", duration=3,
+            sample_rate=48000, channels=2, codec="pcm_s16le", format_name="wav",
+        ).model_dump()
+        record["document"] = {"transcription": transcript, "design": {"fontSize": 64}}
+        record["transcription_info"] = {"filename": "voice.json", "language": "es", "segment_count": 1, "word_count": 1}
+        repo.save(project_id, record)
+        replacement_info = AudioInfo(
+            filename="voice.wav", relative_path=f"{project_id}/media/voice.wav", duration=9,
+            sample_rate=44100, channels=1, codec="pcm_s16le", format_name="wav",
+        )
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(return_value=replacement_info)), patch(
+            "app.api.v1.projects._persist_snapshot", side_effect=OSError("simulated persistence failure")
+        ):
+            with self.assertRaises(OSError):
+                self.client.post(
+                    f"/api/v1/projects/{project_id}/audio?filename=voice.wav", content=b"new audio",
+                )
+        self.assertEqual(audio_path.read_bytes(), b"old audio")
+        saved = repo.get(project_id)
+        self.assertEqual(saved["audio"]["duration"], 3)
+        self.assertEqual(saved["document"]["transcription"], transcript)
+        self.assertIsNotNone(saved["transcription_info"])
+
+    def test_delete_audio_removes_only_audio_and_invalidates_transcription(self):
+        project = self.create_project()
+        project_id = project["id"]
+        repo = app.state.project_repository
+        audio_path = repo.media_path(project_id, "voice.mp3")
+        audio_path.write_bytes(b"mp3")
+        video_path = repo.media_path(project_id, "video.mp4")
+        video_path.write_bytes(b"video")
+        record = repo.get(project_id)
+        record["audio"] = AudioInfo(
+            filename="voice.mp3", relative_path=f"{project_id}/media/voice.mp3", duration=1,
+            sample_rate=44100, channels=2, codec="mp3", format_name="mp3",
+        ).model_dump()
+        record["media"] = MediaInfo(
+            filename="video.mp4", relative_path=f"{project_id}/media/video.mp4", duration=1,
+            width=10, height=10, fps=30, has_audio=True,
+        ).model_dump()
+        record["document"] = {
+            "design": {"fontSize": 60}, "transcription": {"segments": []},
+            "phrase_transcription": {"version": 1, "phrases": []},
+        }
+        record["transcription_info"] = {"filename": "voice.json", "language": "es", "segment_count": 0, "word_count": 0}
+        repo.save(project_id, record)
+        response = self.client.delete(f"/api/v1/projects/{project_id}/audio")
+        self.assertEqual(response.status_code, 200, response.text)
+        saved = self.client.get(f"/api/v1/projects/{project_id}").json()
+        self.assertIsNone(saved["audio"])
+        self.assertIsNone(saved["transcription_info"])
+        self.assertNotIn("transcription", saved["document"])
+        self.assertNotIn("phrase_transcription", saved["document"])
+        self.assertEqual(saved["document"]["design"], {"fontSize": 60})
+        self.assertFalse(audio_path.exists())
+        self.assertTrue(video_path.exists())
+        self.assertEqual(saved["media"]["filename"], "video.mp4")
+
+    def test_audio_replace_and_delete_are_rejected_while_transcription_job_is_active(self):
+        project = self.create_project()
+        project_id = project["id"]
+        active = app.state.active_transcription_projects
+        active[project_id] = "active-job"
+        try:
+            replacement = self.client.post(
+                f"/api/v1/projects/{project_id}/audio?filename=voice.mp3", content=b"mp3",
+            )
+            deletion = self.client.delete(f"/api/v1/projects/{project_id}/audio")
+        finally:
+            active.pop(project_id, None)
+        self.assertEqual(replacement.status_code, 409)
+        self.assertEqual(deletion.status_code, 409)
+        self.assertIsNone(self.client.get(f"/api/v1/projects/{project_id}").json()["audio"])
+
+    def test_audio_import_rejects_unsupported_extension_and_invalid_container(self):
+        project = self.create_project()
+        unsupported = self.client.post(
+            f"/api/v1/projects/{project['id']}/audio?filename=voice.ogg", content=b"audio",
+        )
+        self.assertEqual(unsupported.status_code, 422)
+        with patch("app.api.v1.projects.probe_audio", new=AsyncMock(side_effect=__import__(
+            "app.projects.media", fromlist=["InvalidMedia"]
+        ).InvalidMedia("extension mismatch"))):
+            invalid = self.client.post(
+                f"/api/v1/projects/{project['id']}/audio?filename=voice.wav", content=b"not wav",
+            )
+        self.assertEqual(invalid.status_code, 422)
+        reopened = self.client.get(f"/api/v1/projects/{project['id']}").json()
+        self.assertIsNone(reopened["audio"])
+        self.assertFalse((self.project_root / project["id"] / "media" / "voice.wav").exists())
+
+    def test_audio_stream_supports_ranges_for_wav_and_mp4_fallback(self):
+        project = self.create_project()
+        project_id = project["id"]
+        repo = app.state.project_repository
+        wav_path = repo.media_path(project_id, "voice.wav")
+        wav_path.write_bytes(b"0123456789-wav")
+        record = repo.get(project_id)
+        record["audio"] = AudioInfo(
+            filename="voice.wav", relative_path=f"{project_id}/media/voice.wav", duration=1,
+            sample_rate=48000, channels=2, codec="pcm_s16le", format_name="wav",
+        ).model_dump()
+        repo.save(project_id, record)
+        ranged = self.client.get(f"/api/v1/projects/{project_id}/audio", headers={"Range": "bytes=2-5"})
+        self.assertEqual(ranged.status_code, 206)
+        self.assertEqual(ranged.content, b"2345")
+        self.assertEqual(ranged.headers["content-type"], "audio/wav")
+
+        mp4_path = repo.media_path(project_id, "clip.mp4")
+        mp4_path.write_bytes(b"mp4-audio-track")
+        record = repo.get(project_id)
+        record["audio"] = None
+        record["media"] = MediaInfo(
+            filename="clip.mp4", relative_path=f"{project_id}/media/clip.mp4", duration=1,
+            width=10, height=10, fps=24, has_audio=True,
+        ).model_dump()
+        repo.save(project_id, record)
+        fallback = self.client.get(f"/api/v1/projects/{project_id}/audio")
+        self.assertEqual(fallback.status_code, 200)
+        self.assertEqual(fallback.content, b"mp4-audio-track")
+        self.assertEqual(fallback.headers["content-type"], "video/mp4")
+        self.assertTrue(wav_path.exists())
 
     def test_invalid_media_extension_is_rejected_without_saving(self):
         project = self.create_project()

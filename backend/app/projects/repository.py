@@ -48,6 +48,7 @@ class ProjectRepository:
             "metadata": {},
             "document": {},
             "media": None,
+            "audio": None,
             "transcription": None,
             "transcription_info": None,
         }

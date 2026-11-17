@@ -17,7 +17,7 @@ function job(state: 'queued' | 'running' | 'succeeded' | 'failed', id = 'job-1')
 
 const loadedProject: ProjectDocument = {
   id: 'project-1', name: 'Proyecto', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
-  metadata: {}, document: { transcription: { segments: [] } }, media: null,
+  metadata: {}, document: { transcription: { segments: [] } }, media: null, audio: null,
   transcription: null, transcription_info: null,
 }
 const flush = vi.fn().mockResolvedValue(undefined)
@@ -25,7 +25,7 @@ const flush = vi.fn().mockResolvedValue(undefined)
 function renderPanel(projectId = 'project-1', onProjectUpdated = vi.fn()) {
   return render(<TranscriptionPanel
     projectId={projectId}
-    hasMediaAudio
+    hasAudioSource
     hasTranscript={false}
     flushPending={flush}
     onProjectUpdated={onProjectUpdated}
@@ -127,7 +127,7 @@ describe('transcription panel', () => {
     const updated = vi.fn()
     const view = renderPanel('project-1', updated)
     await waitFor(() => expect(api.get).toHaveBeenCalledOnce())
-    view.rerender(<TranscriptionPanel projectId="project-2" hasMediaAudio hasTranscript={false} flushPending={flush} onProjectUpdated={updated} />)
+  view.rerender(<TranscriptionPanel projectId="project-2" hasAudioSource hasTranscript={false} flushPending={flush} onProjectUpdated={updated} />)
     await act(async () => { resolveStatus(job('succeeded', 'old-job')); await Promise.resolve() })
     expect(api.open).not.toHaveBeenCalled()
     expect(updated).not.toHaveBeenCalled()

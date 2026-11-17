@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { updateProjectDocument, mediaUrl, type ProjectDocument } from '../api/client'
+import { updateProjectDocument, mediaUrl, audioUrl, type ProjectDocument } from '../api/client'
 import { DesignPanel } from './DesignPanel'
 import { ExportPanel } from './ExportPanel'
 import { TranscriptionPanel } from './TranscriptionPanel'
@@ -16,6 +16,8 @@ import {
 import { PlaybackClock } from './clock'
 import { Timeline } from './Timeline'
 import { TranscriptEditor } from './TranscriptEditor'
+import { PhraseTranscriptionEditor } from './PhraseTranscriptionEditor'
+import type { PhraseTranscription } from './phrases'
 import {
   activeAt,
   createFirstWord,
@@ -72,6 +74,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
   const stageRef = useRef<HTMLDivElement>(null)
   const transcriptRef = useRef(transcript)
   const designRef = useRef(design)
+  const phraseDataRef = useRef<unknown>(documentData.phrase_transcription)
   const revisionRef = useRef(0)
   const savedRevisionRef = useRef(0)
   const lastSaveErrorRef = useRef<Error | null>(null)
@@ -81,6 +84,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
   if (!clockRef.current) clockRef.current = new PlaybackClock()
   const clock = clockRef.current
   const selectionRef = useRef<{ segmentId: string | null; wordId: string | null }>({ segmentId: null, wordId: null })
+  const phrasePlaybackEndRef = useRef<number | null>(null)
 
   const effectiveDuration = useMemo(() => Math.max(
     1,
@@ -89,11 +93,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
   ), [duration, transcript])
   const playbackDuration = duration > 0 ? duration : effectiveDuration
 
-  const enqueueSave = useCallback((revision: number, nextTranscript: Transcript | null, nextDesign: DesignProfile) => {
+  const enqueueSave = useCallback((revision: number, nextTranscript: Transcript | null, nextDesign: DesignProfile, nextPhraseData: unknown) => {
     setSaveState('saving')
     saveChainRef.current = saveChainRef.current.catch(() => undefined).then(async () => {
       const nextDocument: Record<string, unknown> = { ...project.document, design: nextDesign }
       if (nextTranscript) nextDocument.transcription = nextTranscript
+      if (nextPhraseData !== undefined) nextDocument.phrase_transcription = nextPhraseData
       await updateProjectDocument(project.id, nextDocument)
       savedRevisionRef.current = Math.max(savedRevisionRef.current, revision)
       lastSaveErrorRef.current = null
@@ -112,30 +117,33 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
     return saveChainRef.current
   }, [onStatus, project.document, project.id])
 
-  const scheduleSave = useCallback((nextTranscript: Transcript | null, nextDesign: DesignProfile) => {
+  const scheduleSave = useCallback((nextTranscript: Transcript | null, nextDesign: DesignProfile, nextPhraseData = phraseDataRef.current) => {
     transcriptRef.current = nextTranscript
     designRef.current = nextDesign
+    phraseDataRef.current = nextPhraseData
     revisionRef.current += 1
     const revision = revisionRef.current
     if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     setSaveState('pending')
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null
-      void enqueueSave(revision, nextTranscript, nextDesign)
+      void enqueueSave(revision, nextTranscript, nextDesign, nextPhraseData)
     }, 550)
   }, [enqueueSave])
 
   const flushPending = useCallback(async () => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current)
-      timerRef.current = null
-      await enqueueSave(revisionRef.current, transcriptRef.current, designRef.current)
-    } else if (revisionRef.current > savedRevisionRef.current) {
-      await enqueueSave(revisionRef.current, transcriptRef.current, designRef.current)
-    } else {
-      await saveChainRef.current
+    while (revisionRef.current > savedRevisionRef.current) {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      const revision = revisionRef.current
+      await enqueueSave(revision, transcriptRef.current, designRef.current, phraseDataRef.current)
+      if (savedRevisionRef.current < revision) {
+        throw lastSaveErrorRef.current ?? new Error('Los cambios siguen pendientes de guardado.')
+      }
     }
-    if (revisionRef.current > savedRevisionRef.current) throw lastSaveErrorRef.current ?? new Error('Los cambios siguen pendientes de guardado.')
+    await saveChainRef.current
   }, [enqueueSave])
 
   useImperativeHandle(ref, () => ({ flushPending }), [flushPending])
@@ -268,6 +276,17 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
     syncSelection(safeTime)
   }
 
+  function playVideoPhrase(start: number, end: number) {
+    const video = videoRef.current
+    if (!video || project.media?.has_audio !== true) return
+    phrasePlaybackEndRef.current = end
+    seek(start)
+    void video.play().catch((error: unknown) => {
+      phrasePlaybackEndRef.current = null
+      onStatus(error instanceof Error ? error.message : 'No se pudo reproducir la frase.')
+    })
+  }
+
   function togglePlayback() {
     const video = videoRef.current
     if (!video) return
@@ -396,9 +415,17 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
 
   function onTimeUpdate() {
     const time = videoRef.current?.currentTime ?? 0
+    if (phrasePlaybackEndRef.current !== null && time >= phrasePlaybackEndRef.current) {
+      phrasePlaybackEndRef.current = null
+      videoRef.current?.pause()
+    }
     clock.set(time)
     syncSelection(time)
   }
+
+  const onPhraseDataChange = useCallback((value: PhraseTranscription) => {
+    scheduleSave(transcriptRef.current, designRef.current, value)
+  }, [scheduleSave])
 
   const fullscreenWidth = Math.max(1, Math.min(viewport.width, viewport.height * videoAspect))
   return <section className="editor-workspace">
@@ -419,7 +446,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
 
     <TranscriptionPanel
       projectId={project.id}
-      hasMediaAudio={project.media?.has_audio === true}
+      hasAudioSource={Boolean(project.audio) || project.media?.has_audio === true}
       hasTranscript={Boolean(documentData.transcription ?? project.transcription ?? project.transcription_info)}
       flushPending={flushPending}
       onProjectUpdated={onTranscriptionProjectUpdated}
@@ -571,6 +598,21 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
         onMerge={doMerge}
         onDelete={doDelete}
         onCreateFirstWord={doCreateFirstWord}
+      />
+      <PhraseTranscriptionEditor
+        projectId={project.id}
+        projectName={project.name}
+        audioId={project.audio?.relative_path ?? project.media?.filename ?? null}
+        audioDuration={project.audio?.duration ?? project.media?.duration ?? null}
+        audioSrc={project.audio ? `${audioUrl(project.id)}?v=${encodeURIComponent(project.updated_at)}` : null}
+        transcript={transcript}
+        storedValue={documentData.phrase_transcription}
+        onChange={onPhraseDataChange}
+        flushPending={flushPending}
+        onPlayVideoPhrase={playVideoPhrase}
+        onSeekVideoPhrase={seek}
+        onStopVideoPlayback={() => videoRef.current?.pause()}
+        canPlayPhrase={Boolean(project.audio) || project.media?.has_audio === true}
       />
     </>}
     {(validationMessage || editorError) && <p className="editor-error" role="alert">{validationMessage || editorError}</p>}

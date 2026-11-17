@@ -28,7 +28,7 @@ def safe_upload_name(filename: str) -> str:
     return name
 
 
-async def copy_upload_to_file(request: Any, destination: Path) -> tuple[Path, int]:
+async def copy_upload_to_file(request: Any, destination: Path, *, media_label: str = "Video") -> tuple[Path, int]:
     handle = tempfile.NamedTemporaryFile(
         "wb", dir=destination.parent, prefix=f".{destination.name}.", suffix=".uploading", delete=False
     )
@@ -39,12 +39,12 @@ async def copy_upload_to_file(request: Any, destination: Path) -> tuple[Path, in
             async for chunk in request.stream():
                 total += len(chunk)
                 if total > MAX_MEDIA_BYTES:
-                    raise InvalidMedia("Video exceeds the 4 GiB upload limit")
+                    raise InvalidMedia(f"{media_label} exceeds the 4 GiB upload limit")
                 output.write(chunk)
             output.flush()
             os.fsync(output.fileno())
         if total == 0:
-            raise InvalidMedia("Uploaded video is empty")
+            raise InvalidMedia(f"Uploaded {media_label.lower()} is empty")
         return temp_path, total
     except BaseException:
         if temp_path.exists():

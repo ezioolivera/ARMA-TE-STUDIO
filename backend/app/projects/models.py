@@ -19,6 +19,16 @@ class MediaInfo(BaseModel):
     probe_error: str | None = None
 
 
+class AudioInfo(BaseModel):
+    filename: str
+    relative_path: str
+    duration: float | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    codec: str | None = None
+    format_name: str | None = None
+
+
 class TranscriptSummary(BaseModel):
     filename: str
     language: str | None = None
@@ -33,6 +43,7 @@ class ProjectDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     document: dict[str, Any] = Field(default_factory=dict)
     media: MediaInfo | None = None
+    audio: AudioInfo | None = None
     transcription: dict[str, Any] | None = None
     transcription_info: TranscriptSummary | None = None
 
@@ -43,6 +54,7 @@ class ProjectSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     media: MediaInfo | None = None
+    audio: AudioInfo | None = None
     transcription_info: TranscriptSummary | None = None
 
 

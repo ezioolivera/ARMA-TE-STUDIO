@@ -74,6 +74,7 @@ async def _run_transcription_job(
     project_id: str,
     job_id: str,
     media_path: Path,
+    source_kind: str,
     media_identity: tuple[str, str, int, int],
     media_filename: str,
     config: TranscriptionConfig,
@@ -92,27 +93,31 @@ async def _run_transcription_job(
 
         async with project_locks.setdefault(project_id, asyncio.Lock()):
             latest = _record_or_404(repository, project_id)
-            current_media = latest.get("media")
+            if source_kind == "media" and isinstance(latest.get("audio"), dict):
+                raise TranscriptionConflict("Se importó una fuente de audio preferida mientras corría la transcripción.")
+            current_media = latest.get(source_kind)
             if not isinstance(current_media, dict) or (
                 current_media.get("filename"), current_media.get("relative_path")
             ) != media_identity[:2]:
-                raise TranscriptionConflict("El video del proyecto cambió durante la transcripción.")
+                raise TranscriptionConflict("La fuente del proyecto cambió durante la transcripción.")
             try:
                 current_path = repository.media_path(project_id, current_media["filename"]).resolve(strict=True)
                 current_stat = current_path.stat()
             except (ValueError, OSError, KeyError) as exc:
-                raise TranscriptionConflict("El video del proyecto cambió durante la transcripción.") from exc
+                raise TranscriptionConflict("La fuente del proyecto cambió durante la transcripción.") from exc
             if (current_stat.st_size, current_stat.st_mtime_ns) != media_identity[2:]:
-                raise TranscriptionConflict("El archivo de video cambió durante la transcripción.")
+                raise TranscriptionConflict("El archivo fuente cambió durante la transcripción.")
             if _has_transcription(latest):
                 raise TranscriptionConflict(
                     "El proyecto ya recibió una transcripción mientras se ejecutaba el trabajo."
                 )
 
             document = latest.get("document")
+            next_document = dict(document) if isinstance(document, dict) else {}
+            next_document.pop("phrase_transcription", None)
+            next_document["transcription"] = payload
             latest["document"] = {
-                **(document if isinstance(document, dict) else {}),
-                "transcription": payload,
+                **next_document,
             }
             latest["transcription_info"] = summary.model_dump()
             await _persist_snapshot(repository, autosave, project_id, latest)
@@ -158,16 +163,25 @@ async def start_transcription_job(
 
     async with lock:
         record = _record_or_404(repository, project_id)
-        media = record.get("media")
-        if not isinstance(media, dict) or not isinstance(media.get("filename"), str):
-            raise HTTPException(status_code=422, detail="Importa un video MP4 antes de transcribir.")
-        filename = media["filename"]
-        if Path(filename).suffix.lower() != ".mp4":
-            raise HTTPException(status_code=422, detail="La transcripción requiere un archivo MP4.")
-        if media.get("probe_error"):
-            raise HTTPException(status_code=422, detail="No se pudieron validar los streams del video.")
-        if media.get("has_audio") is not True:
-            raise HTTPException(status_code=422, detail="El video importado no contiene una pista de audio.")
+        audio = record.get("audio")
+        if isinstance(audio, dict):
+            source_kind = "audio"
+            media = audio
+            filename = media.get("filename")
+            if not isinstance(filename, str) or Path(filename).suffix.lower() not in {".wav", ".mp3"}:
+                raise HTTPException(status_code=422, detail="El audio importado no es un archivo WAV o MP3 válido.")
+        else:
+            source_kind = "media"
+            media = record.get("media")
+            if not isinstance(media, dict) or not isinstance(media.get("filename"), str):
+                raise HTTPException(status_code=422, detail="Importa un audio WAV/MP3 o un video MP4 con audio antes de transcribir.")
+            filename = media["filename"]
+            if Path(filename).suffix.lower() != ".mp4":
+                raise HTTPException(status_code=422, detail="La transcripción requiere WAV, MP3 o MP4.")
+            if media.get("probe_error"):
+                raise HTTPException(status_code=422, detail="No se pudieron validar los streams del video.")
+            if media.get("has_audio") is not True:
+                raise HTTPException(status_code=422, detail="El video importado no contiene una pista de audio.")
         if _has_transcription(record):
             raise HTTPException(status_code=409, detail="El proyecto ya tiene una transcripción.")
         active_jobs = request.app.state.active_transcription_projects
@@ -176,20 +190,21 @@ async def start_transcription_job(
         try:
             media_path = repository.media_path(project_id, filename).resolve(strict=True)
         except (ValueError, OSError) as exc:
-            raise HTTPException(status_code=422, detail="No se encuentra el MP4 importado.") from exc
+            raise HTTPException(status_code=422, detail="No se encuentra el archivo de audio importado.") from exc
         media_directory = (repository._directory(project_id) / "media").resolve()
         if media_path.parent != media_directory or not media_path.is_file():
-            raise HTTPException(status_code=422, detail="La ruta del MP4 del proyecto no es válida.")
+            raise HTTPException(status_code=422, detail="La ruta del archivo importado no es válida.")
 
         relative_path = media.get("relative_path")
         if not isinstance(relative_path, str) or not relative_path:
-            raise HTTPException(status_code=422, detail="El MP4 no tiene una ruta de proyecto válida.")
+            raise HTTPException(status_code=422, detail="El archivo importado no tiene una ruta de proyecto válida.")
         media_stat = media_path.stat()
         job = manager.create("transcription", "En cola para transcripción.")
         task = asyncio.create_task(_run_transcription_job(
             project_id=project_id,
             job_id=job.job_id,
             media_path=media_path,
+            source_kind=source_kind,
             media_identity=(filename, relative_path, media_stat.st_size, media_stat.st_mtime_ns),
             media_filename=filename,
             config=config,

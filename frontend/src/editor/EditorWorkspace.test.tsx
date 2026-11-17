@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({ update: vi.fn() }))
 vi.mock('../api/client', () => ({
   updateProjectDocument: api.update,
   mediaUrl: (projectId: string) => `/api/v1/projects/${projectId}/media`,
+  audioUrl: (projectId: string) => `/api/v1/projects/${projectId}/audio`,
 }))
 
 const originalCurrentTime = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime')
@@ -17,6 +18,7 @@ const originalDuration = Object.getOwnPropertyDescriptor(HTMLMediaElement.protot
 const originalPaused = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'paused')
 const originalPlay = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'play')
 const originalPause = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'pause')
+const originalLoad = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'load')
 const originalVideoWidth = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'videoWidth')
 const originalVideoHeight = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'videoHeight')
 const originalCanvasContext = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')
@@ -36,6 +38,7 @@ function projectFixture(document: Record<string, unknown> = {}): ProjectDocument
   return {
     id: 'project-test', name: 'Proyecto de prueba', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
     metadata: {}, document: { transcription: transcript, ...document },
+    audio: null,
     media: { filename: 'test.mp4', duration: 10, width: 1080, height: 1920, fps: 30, video_codec: 'h264', audio_codec: 'aac', has_audio: true, probe_error: null },
     transcription: transcript,
     transcription_info: { filename: 'test.json', language: 'es', segment_count: 1, word_count: 3 },
@@ -83,9 +86,56 @@ describe('editor visual interactions', () => {
     if (originalPaused) Object.defineProperty(HTMLMediaElement.prototype, 'paused', originalPaused)
     if (originalPlay) Object.defineProperty(HTMLMediaElement.prototype, 'play', originalPlay)
     if (originalPause) Object.defineProperty(HTMLMediaElement.prototype, 'pause', originalPause)
+    if (originalLoad) Object.defineProperty(HTMLMediaElement.prototype, 'load', originalLoad)
     if (originalVideoWidth) Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', originalVideoWidth)
     if (originalVideoHeight) Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', originalVideoHeight)
     if (originalCanvasContext) Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', originalCanvasContext)
+  })
+
+  it('persists phrase edits alongside the canonical transcript without changing original word timestamps', async () => {
+    vi.useFakeTimers()
+    render(<EditorWorkspace project={projectFixture()} onStatus={() => undefined} />)
+    fireEvent.change(screen.getByLabelText('Texto F001'), { target: { value: 'Texto de frase editado' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+    const saved = api.update.mock.calls.at(-1)?.[1] as Record<string, any>
+    expect(saved.phrase_transcription.phrases[0]).toMatchObject({ id: 'F001', text: 'Texto de frase editado', wordIds: ['word-hola', 'word-mundo', 'word-hoy'] })
+    expect(saved.transcription.segments[0].words.map((word: any) => [word.start, word.end])).toEqual([[0, 0.4], [0.4, 0.9], [0.9, 1.2]])
+  })
+
+  it('plays a phrase from its start and pauses at its final timestamp', () => {
+    render(<EditorWorkspace project={projectFixture()} onStatus={() => undefined} />)
+    const video = videoElement()
+    fireEvent.click(screen.getByRole('button', { name: 'Reproducir frase' }))
+    expect(video.currentTime).toBe(0)
+    expect(video.paused).toBe(false)
+    video.currentTime = 1.2
+    fireEvent.timeUpdate(video)
+    expect(video.paused).toBe(true)
+  })
+
+  it('changes the phrase audio URL and reloads it when the project audio is replaced from 8 to 40 seconds', () => {
+    const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined)
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+    const initial = {
+      ...projectFixture(),
+      audio: { filename: 'voz.wav', duration: 8, sample_rate: 48000, channels: 2, codec: 'pcm_s16le', format_name: 'wav', relative_path: 'project-test/media/voz.wav' },
+    }
+    const { rerender } = render(<EditorWorkspace project={initial} onStatus={() => undefined} />)
+    const player = screen.getByLabelText('Reproductor de audio de frases')
+    expect(player.getAttribute('src')).toContain('?v=2026-01-01T00%3A00%3A00Z')
+
+    const replaced = {
+      ...initial,
+      updated_at: '2026-01-01T00:00:01Z',
+      audio: { ...initial.audio, filename: 'voz-nueva.wav', duration: 40, relative_path: 'project-test/media/voz-nueva.wav' },
+    }
+    rerender(<EditorWorkspace project={replaced} onStatus={() => undefined} />)
+
+    const replacementPlayer = screen.getByLabelText('Reproductor de audio de frases')
+    expect(replacementPlayer.getAttribute('src')).toContain('?v=2026-01-01T00%3A00%3A01Z')
+    expect(replacementPlayer).not.toBe(player)
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(pause).toHaveBeenCalled()
   })
 
   it('selects a word, seeks the player and synchronizes the timeline playhead', () => {

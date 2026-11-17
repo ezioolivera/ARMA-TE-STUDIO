@@ -5,7 +5,7 @@ import type { ProjectDocument, ProjectSummary } from './api/client'
 
 const api = vi.hoisted(() => ({
   getHealth: vi.fn(), listProjects: vi.fn(), openProject: vi.fn(), createProject: vi.fn(),
-  updateProjectDocument: vi.fn(), deleteProject: vi.fn(), importProjectFile: vi.fn(),
+  updateProjectDocument: vi.fn(), deleteProject: vi.fn(), deleteProjectAudio: vi.fn(), importProjectFile: vi.fn(),
   startTranscriptionJob: vi.fn(), getTranscriptionJob: vi.fn(), events: [] as string[],
 }))
 
@@ -17,10 +17,12 @@ vi.mock('./api/client', () => ({
   createProject: api.createProject,
   updateProjectDocument: api.updateProjectDocument,
   deleteProject: api.deleteProject,
+  deleteProjectAudio: api.deleteProjectAudio,
   importProjectFile: api.importProjectFile,
   startTranscriptionJob: api.startTranscriptionJob,
   getTranscriptionJob: api.getTranscriptionJob,
   mediaUrl: (id: string) => `/media/${id}`,
+  audioUrl: (id: string) => `/audio/${id}`,
 }))
 
 const emptyTranscript = {
@@ -35,7 +37,7 @@ function documentFor(id: string, name: string): ProjectDocument {
   return {
     id, name, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
     metadata: {}, document: { transcription: emptyTranscript },
-    media: null, transcription: emptyTranscript,
+    media: null, audio: null, transcription: emptyTranscript,
     transcription_info: { filename: 'transcription.json', language: 'es', segment_count: 1, word_count: 1 },
   }
 }
@@ -43,7 +45,7 @@ function documentFor(id: string, name: string): ProjectDocument {
 function summary(project: ProjectDocument): ProjectSummary {
   return {
     id: project.id, name: project.name, updated_at: project.updated_at,
-    media: project.media, transcription_info: project.transcription_info,
+    media: project.media, audio: project.audio, transcription_info: project.transcription_info,
   }
 }
 
@@ -118,6 +120,85 @@ describe('application persistence boundaries', () => {
     expect((screen.getByLabelText('Texto palabra 1') as HTMLInputElement).value).toBe('Generada')
     expect(screen.getByText('Transcripción generada y proyecto actualizado.')).toBeTruthy()
     expect(api.getTranscriptionJob).toHaveBeenCalledWith('transcription-1', expect.any(AbortSignal))
+  })
+
+  it('imports WAV audio into the open project and enables transcription without a video', async () => {
+    const initial = { ...documentFor('project-1', 'Proyecto uno'), document: {}, transcription: null, transcription_info: null }
+    const imported: ProjectDocument = {
+      ...initial,
+      audio: {
+        filename: 'voz.wav', duration: 12.5, sample_rate: 48000, channels: 2,
+        codec: 'pcm_s16le', format_name: 'wav', relative_path: 'project-1/media/voz.wav',
+      },
+    }
+    api.listProjects.mockResolvedValue([summary(initial)])
+    api.openProject.mockResolvedValueOnce(initial).mockResolvedValueOnce(imported)
+    api.importProjectFile.mockResolvedValue(imported.audio)
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend conectado')).toBeTruthy())
+    fireEvent.click(document.querySelectorAll('.project-row')[0])
+    await screen.findByLabelText('Importar WAV/MP3')
+    const input = screen.getByLabelText('Importar WAV/MP3') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['audio'], 'voz.wav', { type: 'audio/wav' })] } })
+    await waitFor(() => expect(api.importProjectFile).toHaveBeenCalledWith(
+      'project-1', 'audio', expect.objectContaining({ name: 'voz.wav' }),
+    ))
+    await screen.findByText('voz.wav · 12.5 s')
+    expect((screen.getByRole('button', { name: 'Generar transcripción' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText(/Importa un video para iniciar/)).toBeTruthy()
+  })
+
+  it('confirms audio replacement and immediately clears the old transcript in the editor', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const initial: ProjectDocument = {
+      ...documentFor('project-1', 'Proyecto uno'),
+      audio: { filename: 'voz.wav', duration: 12, sample_rate: 48000, channels: 2, codec: 'pcm_s16le', format_name: 'wav', relative_path: 'project-1/media/voz.wav' },
+    }
+    const replaced: ProjectDocument = {
+      ...initial,
+      audio: { filename: 'voz-final.mp3', duration: 10, sample_rate: 44100, channels: 2, codec: 'mp3', format_name: 'mp3', relative_path: 'project-1/media/voz-final.mp3' },
+      document: { design: { fontFamily: 'Anton' } }, transcription: null, transcription_info: null,
+    }
+    api.listProjects.mockResolvedValue([summary(initial)])
+    api.openProject.mockResolvedValueOnce(initial).mockResolvedValueOnce(replaced)
+    api.importProjectFile.mockResolvedValue(replaced.audio)
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend conectado')).toBeTruthy())
+    fireEvent.click(document.querySelectorAll('.project-row')[0])
+    const input = await screen.findByLabelText('Reemplazar audio') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['mp3'], 'voz-final.mp3', { type: 'audio/mpeg' })] } })
+    expect(window.confirm).toHaveBeenCalled()
+    await waitFor(() => expect(api.importProjectFile).toHaveBeenCalledWith(
+      'project-1', 'audio', expect.objectContaining({ name: 'voz-final.mp3' }),
+    ))
+    await screen.findByText('voz-final.mp3 · 10.0 s')
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('La transcripción actual se eliminará'))
+    expect(screen.queryByLabelText('Texto palabra 1')).toBeNull()
+    expect(screen.getByText(/no tiene una transcripci/)).toBeTruthy()
+  })
+
+  it('confirms audio deletion and refreshes audio metadata and transcript state', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const initial: ProjectDocument = {
+      ...documentFor('project-1', 'Proyecto uno'),
+      audio: { filename: 'voz.mp3', duration: 8, sample_rate: 44100, channels: 2, codec: 'mp3', format_name: 'mp3', relative_path: 'project-1/media/voz.mp3' },
+    }
+    const deleted: ProjectDocument = {
+      ...initial, audio: null, document: { design: initial.document.design },
+      transcription: null, transcription_info: null,
+    }
+    api.listProjects.mockResolvedValue([summary(initial)])
+    api.openProject.mockResolvedValueOnce(initial).mockResolvedValueOnce(deleted)
+    api.deleteProjectAudio.mockResolvedValue({ id: 'project-1', deleted: true })
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Backend conectado')).toBeTruthy())
+    fireEvent.click(document.querySelectorAll('.project-row')[0])
+    fireEvent.click(await screen.findByRole('button', { name: 'Eliminar audio' }))
+    await waitFor(() => expect(api.deleteProjectAudio).toHaveBeenCalledWith('project-1'))
+    expect(window.confirm).toHaveBeenCalled()
+    await screen.findByLabelText('Importar WAV/MP3')
+    expect(screen.queryByText('voz.mp3 · 8.0 s')).toBeNull()
+    expect(screen.getByText(/no tiene una transcripci/)).toBeTruthy()
   })
 
   it('requires confirmation and leaves a project untouched when deletion is cancelled', async () => {

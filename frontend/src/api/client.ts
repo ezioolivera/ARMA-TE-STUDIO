@@ -16,6 +16,16 @@ export interface MediaInfo {
   probe_error: string | null
 }
 
+export interface AudioInfo {
+  filename: string
+  duration: number | null
+  sample_rate: number | null
+  channels: number | null
+  codec: string | null
+  format_name: string | null
+  relative_path: string
+}
+
 export interface TranscriptInfo {
   filename: string
   language: string | null
@@ -28,6 +38,7 @@ export interface ProjectSummary {
   name: string
   updated_at: string
   media: MediaInfo | null
+  audio: AudioInfo | null
   transcription_info: TranscriptInfo | null
 }
 
@@ -155,9 +166,15 @@ export function deleteProject(projectId: string): Promise<{ id: string; deleted:
   })
 }
 
+export function deleteProjectAudio(projectId: string): Promise<{ id: string; deleted: boolean }> {
+  return request<{ id: string; deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/audio`, {
+    method: 'DELETE',
+  }, true)
+}
+
 export async function importProjectFile<T>(
   projectId: string,
-  kind: 'media' | 'transcription',
+  kind: 'media' | 'audio' | 'transcription',
   file: File,
 ): Promise<T> {
   const query = new URLSearchParams({ filename: file.name })
@@ -183,6 +200,10 @@ export async function importProjectFile<T>(
 
 export function mediaUrl(projectId: string): string {
   return `${apiBaseUrl}/projects/${encodeURIComponent(projectId)}/media`
+}
+
+export function audioUrl(projectId: string): string {
+  return `${apiBaseUrl}/projects/${encodeURIComponent(projectId)}/audio`
 }
 
 export async function createProjectExport(

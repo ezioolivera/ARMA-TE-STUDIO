@@ -10,7 +10,7 @@ import {
 
 interface Props {
   projectId: string
-  hasMediaAudio: boolean
+  hasAudioSource: boolean
   hasTranscript: boolean
   flushPending: () => Promise<void>
   onProjectUpdated: (project: ProjectDocument) => void
@@ -38,7 +38,7 @@ function isActive(state: TranscriptionJob['state'] | undefined): boolean {
   return state === 'queued' || state === 'running'
 }
 
-export function TranscriptionPanel({ projectId, hasMediaAudio, hasTranscript, flushPending, onProjectUpdated }: Props) {
+export function TranscriptionPanel({ projectId, hasAudioSource, hasTranscript, flushPending, onProjectUpdated }: Props) {
   const [model, setModel] = useState<TranscriptionModel>('small')
   const [language, setLanguage] = useState<'es' | null>('es')
   const [jobId, setJobId] = useState<string | null>(() => readStoredJob(projectId))
@@ -123,7 +123,7 @@ export function TranscriptionPanel({ projectId, hasMediaAudio, hasTranscript, fl
   }, [jobId, pollRevision, projectId])
 
   async function start(): Promise<void> {
-    if (startLockRef.current || starting || jobId || !hasMediaAudio || hasTranscript) return
+    if (startLockRef.current || starting || jobId || !hasAudioSource || hasTranscript) return
     startLockRef.current = true
     setStarting(true)
     setError('')
@@ -149,7 +149,7 @@ export function TranscriptionPanel({ projectId, hasMediaAudio, hasTranscript, fl
   }
 
   const active = starting || isActive(job?.state) || Boolean(jobId && !job)
-  const canStart = hasMediaAudio && !hasTranscript && !active && !jobId && !recovering
+  const canStart = hasAudioSource && !hasTranscript && !active && !jobId && !recovering
 
   return <section className="export-panel transcription-panel" aria-label="Transcripción">
     <div className="export-heading"><div><p className="eyebrow">AUTOMÁTICA</p><h3>Transcripción</h3></div></div>
@@ -179,6 +179,6 @@ export function TranscriptionPanel({ projectId, hasMediaAudio, hasTranscript, fl
     </button>}
     {message && <p className="export-message" role="status">{message}</p>}
     {error && <p className="export-error" role="alert">{error}</p>}
-    {!hasMediaAudio && <p className="muted">Importa un MP4 con audio para generar la transcripción.</p>}
+    {!hasAudioSource && <p className="muted">Importa un WAV, MP3 o MP4 con audio para generar la transcripción.</p>}
   </section>
 }

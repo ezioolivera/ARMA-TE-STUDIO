@@ -3,12 +3,14 @@ import {
   ApiError,
   createProject,
   deleteProject,
+  deleteProjectAudio,
   getHealth,
   importProjectFile,
   listProjects,
   openProject,
   updateProjectDocument,
   type HealthResponse,
+  type AudioInfo,
   type MediaInfo,
   type ProjectDocument,
   type ProjectSummary,
@@ -100,12 +102,13 @@ export default function App() {
     } catch (error) { showError(error) } finally { setBusy(false) }
   }
 
-  async function handleImport(kind: 'media' | 'transcription', file?: File) {
+  async function handleImport(kind: 'media' | 'audio' | 'transcription', file?: File) {
     if (!selected || !file) return
     setBusy(true)
     try {
       await editorRef.current?.flushPending()
       if (kind === 'media') await importProjectFile<MediaInfo>(selected.id, kind, file)
+      else if (kind === 'audio') await importProjectFile<AudioInfo>(selected.id, kind, file)
       else await importProjectFile<TranscriptInfo>(selected.id, kind, file)
       let opened = await openProject(selected.id)
       if (kind === 'transcription' && opened.transcription) {
@@ -118,8 +121,23 @@ export default function App() {
         setEditorRevision((value) => value + 1)
       }
       setSelected(opened)
+      if (kind === 'audio') setEditorRevision((value) => value + 1)
       await refreshProjects()
       setMessage(`${file.name} importado al proyecto.`)
+    } catch (error) { showError(error) } finally { setBusy(false) }
+  }
+
+  async function handleDeleteAudio() {
+    if (!selected) return
+    setBusy(true)
+    try {
+      await editorRef.current?.flushPending()
+      await deleteProjectAudio(selected.id)
+      const updated = await openProject(selected.id)
+      setSelected(updated)
+      setEditorRevision((value) => value + 1)
+      await refreshProjects()
+      setMessage('Audio eliminado; la transcripción asociada también se eliminó.')
     } catch (error) { showError(error) } finally { setBusy(false) }
   }
 
@@ -155,6 +173,22 @@ export default function App() {
           <div className="project-file-actions">
             <span className="project-id">{selected.id}</span>
             <label className="button secondary">Importar MP4<input type="file" accept="video/mp4,.mp4" disabled={busy} onChange={(event) => { void handleImport('media', event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
+            <label className="button secondary">{selected.audio ? 'Reemplazar audio' : 'Importar WAV/MP3'}<input type="file" accept="audio/wav,audio/x-wav,audio/mpeg,.wav,.mp3" disabled={busy} onChange={(event) => {
+              const file = event.currentTarget.files?.[0]
+              const hasTranscript = Boolean(selected.transcription ?? selected.document.transcription ?? selected.transcription_info)
+              const needsConfirmation = Boolean(selected.audio || hasTranscript)
+              const confirmation = selected.audio
+                ? `¿Reemplazar el audio ${selected.audio.filename} por ${file?.name}? La transcripción actual se eliminará.`
+                : 'Importar este audio invalidará la transcripción existente porque pertenece a otra fuente.'
+              if (file && (!needsConfirmation || window.confirm(confirmation))) void handleImport('audio', file)
+              event.currentTarget.value = ''
+            }} /></label>
+            {selected.audio && <>
+              <span className="project-id">{selected.audio.filename}{selected.audio.duration ? ` · ${selected.audio.duration.toFixed(1)} s` : ''}</span>
+              <button className="button secondary" type="button" disabled={busy} onClick={() => {
+                if (window.confirm(`¿Eliminar ${selected.audio?.filename} y su transcripción asociada?`)) void handleDeleteAudio()
+              }}>Eliminar audio</button>
+            </>}
             <label className="button secondary">Importar JSON<input type="file" accept="application/json,.json" disabled={busy} onChange={(event) => { void handleImport('transcription', event.target.files?.[0]); event.currentTarget.value = '' }} /></label>
           </div>
           <EditorWorkspace

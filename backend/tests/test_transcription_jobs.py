@@ -113,6 +113,32 @@ class TranscriptionJobApiTests(unittest.TestCase):
         self.assertEqual(saved["transcription_info"]["word_count"], 1)
         self.assertIsNone(saved["transcription"])
 
+    def test_imported_audio_is_transcribed_and_saved_while_existing_video_is_preserved(self):
+        project_id, video_path = self.create_project_with_media(has_audio=False)
+        repository: ProjectRepository = app.state.project_repository
+        audio_path = repository.media_path(project_id, "voice.mp3")
+        audio_path.write_bytes(b"mock mp3 data")
+        record = repository.get(project_id)
+        record["audio"] = {
+            "filename": "voice.mp3", "relative_path": f"{project_id}/media/voice.mp3",
+            "duration": 1.0, "sample_rate": 44100, "channels": 2,
+            "codec": "mp3", "format_name": "mp3",
+        }
+        repository.save(project_id, record)
+        fake_transcribe = AsyncMock(return_value=valid_result())
+        with patch("app.api.v1.transcriptions.transcribe_media", fake_transcribe):
+            response = self.client.post(
+                f"/api/v1/projects/{project_id}/transcription-jobs", json={},
+            )
+            self.assertEqual(response.status_code, 202, response.text)
+            job = self.wait_for_job(response.json()["job_id"])
+        self.assertEqual(job["state"], "succeeded")
+        self.assertEqual(fake_transcribe.await_args.args[0], audio_path.resolve())
+        saved = repository.get(project_id)
+        self.assertEqual(saved["media"]["filename"], "voz.mp4")
+        self.assertEqual(saved["audio"]["filename"], "voice.mp3")
+        self.assertEqual(saved["document"]["transcription"]["segments"][0]["words"][0]["end"], 0.8)
+
     def test_invalid_word_timestamps_fail_without_altering_project(self):
         project_id, _ = self.create_project_with_media()
         invalid = TranscriptionResult(
