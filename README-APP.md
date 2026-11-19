@@ -1,5 +1,14 @@
 # ARMA-TE STUDIO — Editor local de subtítulos
 
+![Logotipo ARMA-TE STUDIO](frontend/public/brand/arma-te-studio-logo-horizontal.png)
+
+**A PRODUCT BY ARMA-TE**
+
+La portada para configurar manualmente como Social Preview en GitHub está en
+[`docs/assets/arma-te-studio-github-banner.png`](docs/assets/arma-te-studio-github-banner.png).
+Paleta corporativa: turquesa `#009C9C`, naranja `#FF6500`, verde petróleo
+`#0F2A29`, fondo oscuro `#081716` y blanco `#FFFFFF`.
+
 Aplicación local para Windows con React, Vite y TypeScript en `frontend/`, y
 FastAPI en `backend/`. Incluye gestión durable de proyectos y medios, un editor
 visual de subtítulos sincronizado con el video, generación de transcripciones

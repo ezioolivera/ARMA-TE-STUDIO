@@ -147,7 +147,7 @@ export default function App() {
 
   return <main className="studio-shell">
     <header className="topbar">
-      <div className="brand-mark" aria-hidden="true">A/T</div>
+      <img className="brand-logo" src="/brand/arma-te-studio-logo-horizontal.png" alt="ARMA-TE STUDIO — A product by ARMA-TE" />
       <div className="brand-title"><p className="eyebrow">ARMA-TE STUDIO</p><h1>Editor de subtítulos</h1></div>
       <div className={`connection connection--${connection}`} role="status" aria-live="polite"><span className="connection-dot" />{message}</div>
     </header>
