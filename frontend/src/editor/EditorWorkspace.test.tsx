@@ -95,6 +95,7 @@ describe('editor visual interactions', () => {
   it('persists phrase edits alongside the canonical transcript without changing original word timestamps', async () => {
     vi.useFakeTimers()
     render(<EditorWorkspace project={projectFixture()} onStatus={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Frases' }))
     fireEvent.change(screen.getByLabelText('Texto F001'), { target: { value: 'Texto de frase editado' } })
     await act(async () => { await vi.advanceTimersByTimeAsync(600) })
     const saved = api.update.mock.calls.at(-1)?.[1] as Record<string, any>
@@ -104,6 +105,7 @@ describe('editor visual interactions', () => {
 
   it('plays a phrase from its start and pauses at its final timestamp', () => {
     render(<EditorWorkspace project={projectFixture()} onStatus={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Frases' }))
     const video = videoElement()
     fireEvent.click(screen.getByRole('button', { name: 'Reproducir frase' }))
     expect(video.currentTime).toBe(0)
@@ -121,6 +123,7 @@ describe('editor visual interactions', () => {
       audio: { filename: 'voz.wav', duration: 8, sample_rate: 48000, channels: 2, codec: 'pcm_s16le', format_name: 'wav', relative_path: 'project-test/media/voz.wav' },
     }
     const { rerender } = render(<EditorWorkspace project={initial} onStatus={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Frases' }))
     const player = screen.getByLabelText('Reproductor de audio de frases')
     expect(player.getAttribute('src')).toContain('?v=2026-01-01T00%3A00%3A00Z')
 

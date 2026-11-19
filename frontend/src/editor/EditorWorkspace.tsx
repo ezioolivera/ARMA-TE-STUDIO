@@ -59,6 +59,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
   const [design, setDesign] = useState<DesignProfile>(() => normalizeDesign(storedDesign))
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null)
   const [selectedWordId, setSelectedWordId] = useState<string | null>(null)
+  const [transcriptMode, setTranscriptMode] = useState<'words' | 'phrases'>('words')
   const [duration, setDuration] = useState(project.media?.duration ?? 0)
   const [videoAspect, setVideoAspect] = useState((project.media?.width && project.media?.height) ? project.media.width / project.media.height : 16 / 9)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -584,37 +585,45 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, Props>(function
       </div>
     </div>}
 
-    {!transcript ? <div className="editor-empty">Este proyecto no tiene una transcripción válida. Importa un JSON con segmentos y tiempos para editarlo.</div> : <>
-      <TranscriptEditor
-        segments={transcript.segments}
-        selectedSegmentId={selectedSegmentId}
-        selectedWordId={selectedWordId}
-        onSelectSegment={(id) => selectSegment(id, true)}
-        onSelectWord={selectWord}
-        onUpdateWord={updateWord}
-        onUpdateSegmentTimes={updateSegmentTimes}
-        onUpdatePlainSegment={updatePlainSegment}
-        onSplit={doSplit}
-        onMerge={doMerge}
-        onDelete={doDelete}
-        onCreateFirstWord={doCreateFirstWord}
-      />
-      <PhraseTranscriptionEditor
-        projectId={project.id}
-        projectName={project.name}
-        audioId={project.audio?.relative_path ?? project.media?.filename ?? null}
-        audioDuration={project.audio?.duration ?? project.media?.duration ?? null}
-        audioSrc={project.audio ? `${audioUrl(project.id)}?v=${encodeURIComponent(project.updated_at)}` : null}
-        transcript={transcript}
-        storedValue={documentData.phrase_transcription}
-        onChange={onPhraseDataChange}
-        flushPending={flushPending}
-        onPlayVideoPhrase={playVideoPhrase}
-        onSeekVideoPhrase={seek}
-        onStopVideoPlayback={() => videoRef.current?.pause()}
-        canPlayPhrase={Boolean(project.audio) || project.media?.has_audio === true}
-      />
-    </>}
+    {!transcript ? <div className="editor-empty">Este proyecto no tiene una transcripción válida. Importa un JSON con segmentos y tiempos para editarlo.</div> : <section className="transcript-workspace" aria-label="Edición de transcripción">
+      <div className="transcript-mode-tabs" role="group" aria-label="Modo de transcripción">
+        <button id={`transcript-tab-words-${project.id}`} type="button" aria-pressed={transcriptMode === 'words'} aria-controls={`transcript-panel-words-${project.id}`} onClick={() => setTranscriptMode('words')}>Palabras</button>
+        <button id={`transcript-tab-phrases-${project.id}`} type="button" aria-pressed={transcriptMode === 'phrases'} aria-controls={`transcript-panel-phrases-${project.id}`} onClick={() => setTranscriptMode('phrases')}>Frases</button>
+      </div>
+      <div id={`transcript-panel-words-${project.id}`} className="transcript-mode-panel" hidden={transcriptMode !== 'words'}>
+        <TranscriptEditor
+          segments={transcript.segments}
+          selectedSegmentId={selectedSegmentId}
+          selectedWordId={selectedWordId}
+          onSelectSegment={(id) => selectSegment(id, true)}
+          onSelectWord={selectWord}
+          onUpdateWord={updateWord}
+          onUpdateSegmentTimes={updateSegmentTimes}
+          onUpdatePlainSegment={updatePlainSegment}
+          onSplit={doSplit}
+          onMerge={doMerge}
+          onDelete={doDelete}
+          onCreateFirstWord={doCreateFirstWord}
+        />
+      </div>
+      <div id={`transcript-panel-phrases-${project.id}`} className="transcript-mode-panel" hidden={transcriptMode !== 'phrases'}>
+        <PhraseTranscriptionEditor
+          projectId={project.id}
+          projectName={project.name}
+          audioId={project.audio?.relative_path ?? project.media?.filename ?? null}
+          audioDuration={project.audio?.duration ?? project.media?.duration ?? null}
+          audioSrc={project.audio ? `${audioUrl(project.id)}?v=${encodeURIComponent(project.updated_at)}` : null}
+          transcript={transcript}
+          storedValue={documentData.phrase_transcription}
+          onChange={onPhraseDataChange}
+          flushPending={flushPending}
+          onPlayVideoPhrase={playVideoPhrase}
+          onSeekVideoPhrase={seek}
+          onStopVideoPlayback={() => videoRef.current?.pause()}
+          canPlayPhrase={Boolean(project.audio) || project.media?.has_audio === true}
+        />
+      </div>
+    </section>}
     {(validationMessage || editorError) && <p className="editor-error" role="alert">{validationMessage || editorError}</p>}
   </section>
 })

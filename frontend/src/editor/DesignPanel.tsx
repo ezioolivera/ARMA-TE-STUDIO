@@ -20,32 +20,38 @@ export const DesignPanel = memo(function DesignPanel({ value, onChange, clock, o
   }])
   return <aside className="design-panel">
     <h3>Diseño de subtítulos</h3>
+    <section className="design-group"><h4>Texto y tipografía</h4><div className="design-group-fields">
     <label>Tipografía
       <select value={value.fontFamily} onChange={(event) => set('fontFamily', event.target.value)}>
         {FONT_CHOICES.map((font) => <option key={font.label} value={font.label}>{font.label}</option>)}
       </select>
     </label>
+    <label>Formato del texto
+      <select aria-label="Formato del texto" value={value.textFormat} onChange={(event) => set('textFormat', event.target.value as DesignProfile['textFormat'])}>
+        <option value="original">Original</option><option value="uppercase">MAYÚSCULAS</option><option value="lowercase">minúsculas</option><option value="title">Tipo Título</option>
+      </select>
+    </label>
+    </div></section>
+    <section className="design-group"><h4>Tamaño y espaciado</h4><div className="design-group-fields">
     <label>Tamaño <span>{value.fontSize}px</span><input type="range" min="18" max="96" value={value.fontSize} onChange={(event) => set('fontSize', Number(event.target.value))} /></label>
+    <label>Espaciado entre letras <span>{value.letterSpacing}px</span><input type="range" min="-2" max="8" step="0.5" value={value.letterSpacing} onChange={(event) => set('letterSpacing', Number(event.target.value))} /></label>
+    <label>Espaciado entre palabras <span>{value.wordSpacing.toFixed(2)}em</span><input type="range" min="0" max="1" step="0.02" value={value.wordSpacing} onChange={(event) => set('wordSpacing', Number(event.target.value))} /></label>
+    <label>Ancho máximo <span>{value.maxWidth}%</span><input type="range" min="30" max="100" value={value.maxWidth} onChange={(event) => set('maxWidth', Number(event.target.value))} /></label>
+    </div></section>
+    <section className="design-group"><h4>Color y apariencia</h4><div className="design-group-fields">
     <ColorControl label="Color del texto" value={value.textColor} onChange={(color) => set('textColor', color)} />
     <ColorControl label="Palabra activa" value={value.activeWordColor} onChange={(color) => set('activeWordColor', color)} />
     <ColorControl label="Contorno" value={value.outlineColor} onChange={(color) => set('outlineColor', color)} />
     <label>Grosor de contorno <span>{value.outlineWidth}px</span><input type="range" min="0" max="8" step="0.5" value={value.outlineWidth} onChange={(event) => set('outlineWidth', Number(event.target.value))} /></label>
     <label className="checkbox-control"><input type="checkbox" checked={value.shadow} onChange={(event) => set('shadow', event.target.checked)} /> Sombra</label>
+    </div></section>
+    <section className="design-group"><h4>Posición y animación</h4><div className="design-group-fields">
     <label>Alineación
       <select value={value.alignment} onChange={(event) => set('alignment', event.target.value as DesignProfile['alignment'])}>
         <option value="left">Izquierda</option><option value="center">Centrada</option><option value="right">Derecha</option>
       </select>
     </label>
     <PositionControls value={value} clock={clock} onPositionChange={onPositionChange} />
-    <label>Espaciado entre letras <span>{value.letterSpacing}px</span><input type="range" min="-2" max="8" step="0.5" value={value.letterSpacing} onChange={(event) => set('letterSpacing', Number(event.target.value))} /></label>
-    <label>Espaciado entre palabras <span>{value.wordSpacing.toFixed(2)}em</span><input type="range" min="0" max="1" step="0.02" value={value.wordSpacing} onChange={(event) => set('wordSpacing', Number(event.target.value))} /></label>
-    <label>Ancho máximo <span>{value.maxWidth}%</span><input type="range" min="30" max="100" value={value.maxWidth} onChange={(event) => set('maxWidth', Number(event.target.value))} /></label>
-    <button className="subtle-button" type="button" onClick={() => onChange({ ...DEFAULT_DESIGN })}>Restablecer diseño</button>
-    <label>Formato del texto
-      <select aria-label="Formato del texto" value={value.textFormat} onChange={(event) => set('textFormat', event.target.value as DesignProfile['textFormat'])}>
-        <option value="original">Original</option><option value="uppercase">MAYÚSCULAS</option><option value="lowercase">minúsculas</option><option value="title">Tipo Título</option>
-      </select>
-    </label>
     <section className="temporal-design" aria-label="Posiciones temporales">
       <div className="temporal-design-heading"><strong>Posiciones temporales</strong><button className="subtle-button" type="button" onClick={addEvent}>Agregar cambio</button></div>
       {value.temporalEvents.map((event, index) => <fieldset className="temporal-event" key={event.id}>
@@ -66,6 +72,8 @@ export const DesignPanel = memo(function DesignPanel({ value, onChange, clock, o
         <button className="subtle-button danger-button" type="button" aria-label={`Eliminar cambio ${index + 1}`} onClick={() => set('temporalEvents', value.temporalEvents.filter((item) => item.id !== event.id))}>Eliminar cambio</button>
       </fieldset>)}
     </section>
+    </div></section>
+    <button className="subtle-button" type="button" onClick={() => onChange({ ...DEFAULT_DESIGN })}>Restablecer diseño</button>
   </aside>
 })
 
